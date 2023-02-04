@@ -1,9 +1,13 @@
+import warnings
 import pandas as pd
 import os
 import ccxt
 import time
 from datetime import datetime, timedelta
 import pytz
+pd.options.mode.chained_assignment = None
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 
 def add_RA(df, win_size, col, name):
@@ -20,42 +24,93 @@ def find_price_spikes(df, p_thresh, win_size):
     # where the high is at least p_thresh greater than x-hr RA
     p_spike_mask = df['High'] > p_threshold
     df_price_spike = df[p_spike_mask]
+    df_price_spike.drop([pRA], axis=1, inplace=True)
+
     return (p_spike_mask, df_price_spike)
 
 
-def find_volume_spikes(df, v_thresh, win_size):
-    # add rolling/moving average column to dataframe
-    vRA = str(win_size)+'m Volume RA'
-    add_RA(df, win_size, 'Volume', vRA)
+def save_csv(df, p_thresh, win_size):
+    file_name = 'output_'+str(p_thresh)+'_'+str(win_size)+'.csv'
 
-    # find spikes
-    vol_threshold = v_thresh * df[vRA]  # v_thresh times increase in volume
-    # where the vol is at least v_thresh greater than the x-hr RA
-    vol_spike_mask = df['Volume'] > vol_threshold
-    df_vol_spike = df[vol_spike_mask]
-
-    return (vol_spike_mask, df_vol_spike)
-
-
-def analyzesymbol(df, exchange, symbol, v_thresh=3, p_thresh=1.03, win_size=30, c_size='1m'):
-
-    # find spikes
-    vmask, vdf = find_volume_spikes(df, v_thresh, win_size)
-    num_v_spikes = vdf.shape[0]
-
-    pmask, pdf = find_price_spikes(df, p_thresh, win_size)
-    num_p_spikes = pdf.shape[0]
-
-    vp_combined_mask = (vmask) & (pmask)
-    vp_combined_df = df[vp_combined_mask]
-    vp_combined_df['symbol'] = symbol
-    if(os.path.isfile('output.csv')):
-        vp_combined_df.to_csv('output.csv', mode='a',
-                              index=False, header=False)
-
+    if not os.path.isfile(file_name):
+        df.to_csv(file_name, mode='w', index=False, header=True)
     else:
-        vp_combined_df.to_csv('output.csv', mode='a', index=False, header=True)
+        exist_df = pd.read_csv(file_name)
 
+        final_df = pd.concat([exist_df, df], ignore_index=True)
+        final_df = final_df.drop_duplicates(
+            subset=df.columns.difference(['scantime']))
+        final_df['Timestamp'] = pd.to_datetime(final_df['Timestamp'])
+        final_df.sort_values(by='Timestamp', ascending=False, inplace=True)
+
+        final_df.to_csv(file_name, mode='w',
+                        index=False, header=True)
+
+
+def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size=15, c_size='1m'):
+
+    pw_dic_q = {
+        1.02: 15,
+        1.03: 15,
+        1.04: 15,
+        1.05: 15,
+        1.06: 15,
+        1.07: 15,
+        1.08: 15,
+        1.09: 15,
+        1.1: 15
+    }
+
+    pw_dic_h = {
+        1.02: 30,
+        1.03: 30,
+        1.04: 30,
+        1.05: 30,
+        1.06: 30,
+        1.07: 30,
+        1.08: 30,
+        1.09: 30,
+        1.1: 30
+    }
+
+    temppdf = pd.DataFrame()
+
+    for p_thresh, win_size in pw_dic_q.items():
+        df = orig_df.copy()
+        pmask, pdf = find_price_spikes(df, p_thresh, win_size)
+        # print(pdf)
+        if pdf.empty and temppdf.empty:
+            break
+        elif pdf.empty and (not temppdf.empty):
+            pdf = temppdf.copy()
+            break
+        else:
+            temppdf = pdf.copy()
+            continue
+    pdf['symbol'] = symbol
+    pdf['scantime'] = datetime.now(
+        pytz.utc)+timedelta(hours=5, minutes=30)
+
+    if not pdf.empty:
+        save_csv(pdf, p_thresh, win_size)
+
+    tempppdf = pd.DataFrame()
+    for p_thresh, win_size in pw_dic_h.items():
+        sdf = orig_df.copy()
+        ppmask, ppdf = find_price_spikes(sdf, p_thresh, win_size)
+        if ppdf.empty and tempppdf.empty:
+            break
+        elif ppdf.empty and (not tempppdf.empty):
+            ppdf = tempppdf.copy()
+            break
+        else:
+            tempppdf = ppdf.copy()
+            continue
+    ppdf['symbol'] = symbol
+    ppdf['scantime'] = datetime.now(
+        pytz.utc)+timedelta(hours=5, minutes=30)
+    if not ppdf.empty:
+        save_csv(ppdf, p_thresh, win_size)
     print('completed')
 
 
@@ -65,6 +120,8 @@ def create_ohlcv_df(data):
     df['Timestamp'] = pd.to_datetime(df['Timestamp'], unit='ms', origin='unix')
     df['Timestamp'] = df['Timestamp'].apply(lambda x: datetime(
         x.year, x.month, x.day, x.hour, x.minute, x.second)+timedelta(hours=5, minutes=30))
+
+    df.drop(['Open', 'Low'], axis=1, inplace=True)
 
     return df
 
@@ -94,6 +151,7 @@ def pull_data(exchange, from_date, n_candles, c_size, f_path, skip=False):
     # pull ohlcv
     flag = 0
     while True:
+        start_time = time.time()
         for symbol in usdt_symbols:
             for attempt in range(5):  # 5 attempts max
                 try:
@@ -102,7 +160,6 @@ def pull_data(exchange, from_date, n_candles, c_size, f_path, skip=False):
                               '[{}/{}]'.format(count, len(usdt_symbols)), end='......')
                     data = exc_instance.fetch_ohlcv(
                         symbol, c_size, from_timestamp, n_candles)
-                    # data=exc_instance.fetch_ticker('BTC'+'/'+'USDT')
 
                     # if missing candles then skip this pair
                     if len(data) < n_candles and (skip is True):
@@ -115,11 +172,6 @@ def pull_data(exchange, from_date, n_candles, c_size, f_path, skip=False):
                     df = create_ohlcv_df(data)
 
                     analyzesymbol(df, exchange, symbol)
-
-                    # # save csv
-                    # symbol=symbol.replace("/","-")
-                    # filename=newpath+'{}_{}.csv'.format(exchange,symbol)
-                    # df.to_csv(filename)
 
                 except(ccxt.ExchangeError, ccxt.AuthenticationError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout, IndexError) as error:
                     print('Got an Error', type(error).__name__,
@@ -137,12 +189,10 @@ def pull_data(exchange, from_date, n_candles, c_size, f_path, skip=False):
 
             # wait for rate limit
             # rate limit + 5sec to just to be safe
-            time.sleep((exc_instance.rateLimit/msec)+3)
-
-    # if len(missing_symbols) != 0:
-    #     print('Unable to obtain: ', missing_symbols)
-
-    # return missing_symbols
+            time.sleep((exc_instance.rateLimit/msec))
+        end_time = time.time()-start_time
+        print('taken ', end_time, 'seconds to complete the scan')
+        count = 1
 
 
 def startwork():
