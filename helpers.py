@@ -5,13 +5,31 @@ import ccxt
 import time
 from datetime import datetime, timedelta
 import pytz
+import requests as re
 pd.options.mode.chained_assignment = None
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)
 
+url = 'https://Pdetector.anudeep447.repl.co'
+
 
 def add_RA(df, win_size, col, name):
     df[name] = pd.Series.rolling(df[col], window=win_size, center=False).mean()
+
+
+def parse_msg(df, p_thresh, win_size):
+    msg = ''
+    for index, row in df.iterrows():
+        occurtime = str(row['Timestamp'])[11:16]
+        scantime = str(row['scantime'])[11:16]
+        msg += f"{row['symbol']} inc by {p_thresh}% within {win_size} min,at {occurtime} & scanat{scantime}\n"
+    return msg
+
+
+def send_to_telbot(df, p_thresh, win_size):
+
+    msg = parse_msg(df, p_thresh, win_size)
+    re.post(url, json={"msg": msg})
 
 
 def find_price_spikes(df, p_thresh, win_size):
@@ -45,6 +63,7 @@ def save_csv(df, p_thresh, win_size):
 
         final_df.to_csv(file_name, mode='w',
                         index=False, header=True)
+        send_to_telbot(final_df.head(50), p_thresh, win_size)
 
 
 def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size=15, c_size='1m'):
@@ -88,8 +107,8 @@ def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size
             temppdf = pdf.copy()
             continue
     pdf['symbol'] = symbol
-    pdf['scantime'] = datetime.now(
-        pytz.utc)+timedelta(hours=5, minutes=30)
+    pdf['scantime'] = (datetime.now(
+        pytz.utc)+timedelta(hours=5, minutes=30)).replace(second=0, microsecond=0)
 
     if not pdf.empty:
         save_csv(pdf, p_thresh, win_size)
@@ -107,8 +126,8 @@ def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size
             tempppdf = ppdf.copy()
             continue
     ppdf['symbol'] = symbol
-    ppdf['scantime'] = datetime.now(
-        pytz.utc)+timedelta(hours=5, minutes=30)
+    ppdf['scantime'] = (datetime.now(
+        pytz.utc)+timedelta(hours=5, minutes=30)).replace(second=0, microsecond=0)
     if not ppdf.empty:
         save_csv(ppdf, p_thresh, win_size)
     print('completed')
