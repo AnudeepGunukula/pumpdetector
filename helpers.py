@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta
 import pytz
 import requests as re
+from fake_headers import Headers
 pd.options.mode.chained_assignment = None
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -18,18 +19,27 @@ def add_RA(df, win_size, col, name):
 
 
 def parse_msg(df, p_thresh, win_size):
-    msg = ''
+
+    scantime = str((datetime.now(pytz.utc)+timedelta(hours=5,
+                   minutes=30)).replace(second=0, microsecond=0))[11:16]
+    msg = 'scantime is '+scantime+' \n----------------------------\n'
     for index, row in df.iterrows():
         occurtime = str(row['Timestamp'])[11:16]
-        scantime = str(row['scantime'])[11:16]
-        msg += f"{row['symbol']} inc by {p_thresh}% within {win_size} min,at {occurtime} & scanat{scantime}\n"
+        msg += f"{row['symbol']} inc by {p_thresh}% within {win_size} min,at {occurtime}\n-------------------------\n"
     return msg
 
 
 def send_to_telbot(df, p_thresh, win_size):
 
     msg = parse_msg(df, p_thresh, win_size)
-    re.post(url, json={"msg": msg})
+    try:
+        header = Headers(
+            # generate any browser & os headeers
+            headers=False  # don`t generate misc headers
+        )
+        re.post(url, json={"msg": msg}, headers=header.generate())
+    except:
+        return
 
 
 def find_price_spikes(df, p_thresh, win_size):
@@ -47,30 +57,29 @@ def find_price_spikes(df, p_thresh, win_size):
     return (p_spike_mask, df_price_spike)
 
 
-def save_csv(df, p_thresh, win_size):
-    file_name = 'output_'+str(p_thresh)+'_'+str(win_size)+'.csv'
+# def save_csv(df, p_thresh, win_size):
+#     file_name = 'output_'+str(p_thresh)+'_'+str(win_size)+'.csv'
 
-    if not os.path.isfile(file_name):
-        df.to_csv(file_name, mode='w', index=False, header=True)
-    else:
-        exist_df = pd.read_csv(file_name)
+#     if not os.path.isfile(file_name):
+#         df.to_csv(file_name, mode='w', index=False, header=True)
+#     else:
+#         exist_df = pd.read_csv(file_name)
 
-        final_df = pd.concat([exist_df, df], ignore_index=True)
-        final_df = final_df.drop_duplicates(
-            subset=df.columns.difference(['scantime']))
-        final_df['Timestamp'] = pd.to_datetime(final_df['Timestamp'])
-        final_df.sort_values(by='Timestamp', ascending=False, inplace=True)
+#         final_df = pd.concat([exist_df, df], ignore_index=True)
+#         final_df = final_df.drop_duplicates()
+#         final_df['Timestamp'] = pd.to_datetime(final_df['Timestamp'])
+#         final_df.sort_values(by='Timestamp', ascending=False, inplace=True)
 
-        final_df.to_csv(file_name, mode='w',
-                        index=False, header=True)
-        send_to_telbot(final_df.head(50), p_thresh, win_size)
-
+#         if not exist_df.equals(final_df):
+#             print(exist_df)
+#             print(final_df)
+#             final_df.to_csv(file_name, mode='w',
+#                             index=False, header=True)
+#             send_to_telbot(final_df.head(50), p_thresh, win_size)
 
 def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size=15, c_size='1m'):
 
     pw_dic_q = {
-        1.02: 15,
-        1.03: 15,
         1.04: 15,
         1.05: 15,
         1.06: 15,
@@ -81,10 +90,6 @@ def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size
     }
 
     pw_dic_h = {
-        1.02: 30,
-        1.03: 30,
-        1.04: 30,
-        1.05: 30,
         1.06: 30,
         1.07: 30,
         1.08: 30,
@@ -107,11 +112,12 @@ def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size
             temppdf = pdf.copy()
             continue
     pdf['symbol'] = symbol
-    pdf['scantime'] = (datetime.now(
-        pytz.utc)+timedelta(hours=5, minutes=30)).replace(second=0, microsecond=0)
+    # pdf['scantime'] = (datetime.now(
+    # pytz.utc)+timedelta(hours=5, minutes=30)).replace(second=0, microsecond=0)
 
     if not pdf.empty:
-        save_csv(pdf, p_thresh, win_size)
+        #save_csv(pdf, p_thresh, win_size)
+        send_to_telbot(pdf.head(1), p_thresh, win_size)
 
     tempppdf = pd.DataFrame()
     for p_thresh, win_size in pw_dic_h.items():
@@ -126,10 +132,11 @@ def analyzesymbol(orig_df, exchange, symbol, v_thresh=3, p_thresh=1.02, win_size
             tempppdf = ppdf.copy()
             continue
     ppdf['symbol'] = symbol
-    ppdf['scantime'] = (datetime.now(
-        pytz.utc)+timedelta(hours=5, minutes=30)).replace(second=0, microsecond=0)
+    # ppdf['scantime'] = (datetime.now(
+    # pytz.utc)+timedelta(hours=5, minutes=30)).replace(second=0, microsecond=0)
     if not ppdf.empty:
-        save_csv(ppdf, p_thresh, win_size)
+        #save_csv(ppdf, p_thresh, win_size)
+        send_to_telbot(ppdf.head(1), p_thresh, win_size)
     print('completed')
 
 
@@ -169,55 +176,55 @@ def pull_data(exchange, from_date, n_candles, c_size, f_path, skip=False):
                 usdt_symbols.append(symbol)
     # pull ohlcv
     flag = 0
-    while True:
-        start_time = time.time()
-        for symbol in usdt_symbols:
-            for attempt in range(5):  # 5 attempts max
-                try:
+    start_time = time.time()
+    for symbol in usdt_symbols:
+        for attempt in range(5):  # 5 attempts max
+            try:
+                if flag == 0:
+                    print('Pulling and Analysing: ', exchange, ':', symbol,
+                          '[{}/{}]'.format(count, len(usdt_symbols)), end='......')
+                data = exc_instance.fetch_ohlcv(
+                    symbol, c_size, from_timestamp, n_candles)
+
+                # if missing candles then skip this pair
+                if len(data) < n_candles and (skip is True):
                     if flag == 0:
-                        print('Pulling and Analysing: ', exchange, ':', symbol,
-                              '[{}/{}]'.format(count, len(usdt_symbols)), end='......')
-                    data = exc_instance.fetch_ohlcv(
-                        symbol, c_size, from_timestamp, n_candles)
+                        print('...nodata')
+                    flag = 1
+                    continue
 
-                    # if missing candles then skip this pair
-                    if len(data) < n_candles and (skip is True):
-                        if flag == 0:
-                            print('...nodata')
-                        flag = 1
-                        continue
+                # create df
+                df = create_ohlcv_df(data)
 
-                    # create df
-                    df = create_ohlcv_df(data)
+                analyzesymbol(df, exchange, symbol)
 
-                    analyzesymbol(df, exchange, symbol)
+            except(ccxt.ExchangeError, ccxt.AuthenticationError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout, IndexError) as error:
+                print('Got an Error', type(error).__name__,
+                      error.args, ',retrying in', hold, 'seconds...')
+                # time.sleep(hold)
+            else:  # if no error, proceed to next symbol
+                break
+        else:  # we failed all attempts (enters this block if exit happen from loop without break statement means after 5 attempts)
+            #print('All attempts failed, skipping: ', symbol)
+            # missing_symbols.append(symbol)
+            flag = 0
+            continue
 
-                except(ccxt.ExchangeError, ccxt.AuthenticationError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout, IndexError) as error:
-                    print('Got an Error', type(error).__name__,
-                          error.args, ',retrying in', hold, 'seconds...')
-                    # time.sleep(hold)
-                else:  # if no error, proceed to next symbol
-                    break
-            else:  # we failed all attempts (enters this block if exit happen from loop without break statement means after 5 attempts)
-                #print('All attempts failed, skipping: ', symbol)
-                # missing_symbols.append(symbol)
-                flag = 0
-                continue
+        count += 1  # counting how many symbols worked
 
-            count += 1  # counting how many symbols worked
-
-            # wait for rate limit
-            # rate limit + 5sec to just to be safe
-            time.sleep((exc_instance.rateLimit/msec))
-        end_time = time.time()-start_time
-        print('taken ', end_time, 'seconds to complete the scan')
-        count = 1
+        # wait for rate limit
+        # rate limit + 5sec to just to be safe
+        time.sleep((exc_instance.rateLimit/msec))
+    end_time = time.time()-start_time
+    print('taken ', end_time, 'seconds to complete the scan')
+    count = 1
 
 
 def startwork():
-    UTC = pytz.utc
-    curr_time = datetime.now(UTC)-timedelta(minutes=60)
-    from_date = str(curr_time)
     exchanges = ['binance']
-    for e in exchanges:
-        pull_data(e, from_date, 60, '1m', 'data', skip=True)
+    while True:
+        UTC = pytz.utc
+        curr_time = datetime.now(UTC)-timedelta(minutes=60)
+        from_date = str(curr_time)
+        for e in exchanges:
+            pull_data(e, from_date, 60, '1m', 'data', skip=True)
